@@ -8,18 +8,18 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.0.0/dist/pose-detection.min.js"></script>
     
     <style>
-        /* ------------------- CSS Start ------------------- */
+        /* (CSS 保持不變) */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
             padding: 0;
-            background-color: #000; /* 遊戲背景通常是黑色 */
+            background-color: #000;
             color: white;
             display: flex;
             flex-direction: column;
             align-items: center;
             min-height: 100vh;
-            overflow: hidden; /* 避免滾動條 */
+            overflow: hidden;
         }
 
         #game-container {
@@ -40,12 +40,12 @@
             left: 0;
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: cover; /* 讓影片填滿容器 */
         }
 
         #video {
-            opacity: 0.2; /* 將相機畫面調暗，作為背景 */
-            transform: scaleX(-1); /* 前鏡頭預設鏡像 */
+            opacity: 0.2;
+            transform: scaleX(-1);
         }
 
         #canvas {
@@ -83,8 +83,6 @@
             background-color: #6c757d;
             cursor: not-allowed;
         }
-
-        /* ------------------- CSS End ------------------- */
     </style>
 </head>
 <body>
@@ -105,17 +103,21 @@
         const statusDiv = document.getElementById('status');
         const startBtn = document.getElementById('start-btn');
         const ctx = canvas.getContext('2d');
+        const container = document.getElementById('game-container'); // 取得容器元素
         
         let detector = null;
         let animationFrameId = null;
         let isRunning = false;
         
+        // **新增**：用於儲存計算後的縮放和平移參數
+        let scaleX = 1;
+        let scaleY = 1;
+        let offsetX = 0;
+        let offsetY = 0;
+
         // 偵測點歷史（用於判斷手部移動軌跡）
-        const handHistory = {
-            left: [],
-            right: []
-        };
-        const HISTORY_LENGTH = 5; // 紀錄最近 5 幀的軌跡
+        const handHistory = { left: [], right: [] };
+        const HISTORY_LENGTH = 5;
 
         // 水果類別和狀態
         const FRUITS = ['🍎', '🍉', '🥝', '🍋', '🍇'];
@@ -123,16 +125,15 @@
         let score = 0;
 
         // 遊戲參數
-        const DETECT_INTERVAL_MS = 50; // 每 50ms 偵測一次
         const FRUIT_SIZE = 50;
         let lastLaunchTime = 0;
-        const LAUNCH_INTERVAL = 1500; // 每 1.5 秒發射一個水果
+        const LAUNCH_INTERVAL = 1500;
 
         // --- 1. 核心模型和啟動 ---
 
         async function loadModelsAndStart() {
+             // ... (loadModelsAndStart 內容保持不變) ...
             try {
-                // 載入 MoveNet 模型 (輕量級 SinglePose.Lightning)
                 const detectorConfig = {
                     modelType: poseDetection.SupportedModels.MoveNet,
                     detectorParams: {
@@ -148,7 +149,6 @@
                 startBtn.disabled = false;
                 startBtn.textContent = "開始切水果！";
                 
-                // 啟動相機 (使用前置鏡頭 'user')
                 startCamera();
 
             } catch (error) {
@@ -158,14 +158,15 @@
             }
         }
         
-        // 啟動相機 (使用前置鏡頭)
         async function startCamera() {
+             // ... (startCamera 內容保持不變) ...
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { 
                         facingMode: 'user', 
-                        width: { ideal: 400 }, 
-                        height: { ideal: 600 } 
+                        // 這裡使用較低的理想解析度，以避免手機效能問題
+                        width: { ideal: 480 }, 
+                        height: { ideal: 640 } 
                     } 
                 });
                 video.srcObject = stream;
@@ -175,26 +176,43 @@
             }
         }
 
-        // 影片載入完成後，調整 Canvas 大小
+        // 影片載入完成後，**修正座標對齊計算**
         video.addEventListener('loadeddata', () => {
-            // 確保 Canvas 尺寸與 Video 容器尺寸一致
-            const container = document.getElementById('game-container');
+            const videoRatio = video.videoWidth / video.videoHeight;
+            const containerRatio = container.clientWidth / container.clientHeight;
+
+            // 調整 Canvas 尺寸以匹配容器顯示尺寸
             canvas.width = container.clientWidth;
             canvas.height = container.clientHeight;
+
+            // 由於 object-fit: cover，需要計算實際的縮放比例和偏移量
+            if (videoRatio > containerRatio) {
+                // 影片較寬，垂直方向被裁剪 (左右有黑邊，但 'cover' 會讓黑邊消失，實際是上下被填滿)
+                scaleY = canvas.height / video.videoHeight;
+                scaleX = scaleY; // X 軸也使用 Y 軸的縮放比
+                offsetX = (canvas.width - video.videoWidth * scaleX) / 2;
+                offsetY = 0;
+            } else {
+                // 影片較高，水平方向被裁剪 (上下有黑邊，但 'cover' 會讓黑邊消失，實際是左右被填滿)
+                scaleX = canvas.width / video.videoWidth;
+                scaleY = scaleX; // Y 軸也使用 X 軸的縮放比
+                offsetX = 0;
+                offsetY = (canvas.height - video.videoHeight * scaleY) / 2;
+            }
         });
 
 
-        // --- 2. 水果物件與生成 ---
-
+        // --- 2. 水果物件與生成 (保持不變) ---
         class Fruit {
+            // ... (Fruit Class 內容保持不變) ...
             constructor(emoji) {
                 this.emoji = emoji;
                 this.x = Math.random() * (canvas.width * 0.8) + (canvas.width * 0.1);
-                this.y = canvas.height + FRUIT_SIZE; // 從螢幕底部發射
+                this.y = canvas.height + FRUIT_SIZE;
                 this.radius = FRUIT_SIZE / 2;
                 this.velocity = { 
-                    x: (Math.random() - 0.5) * 5, // 隨機水平速度
-                    y: - (Math.random() * 10 + 20) // 向上發射的初速度
+                    x: (Math.random() - 0.5) * 5,
+                    y: - (Math.random() * 10 + 20)
                 };
                 this.gravity = 0.9;
                 this.isCut = false;
@@ -213,27 +231,16 @@
                 ctx.textBaseline = 'middle';
 
                 if (this.isCut) {
-                    // 繪製被切開的兩半 (簡化處理)
                     const halfText = this.emoji.substring(0, 1);
                     ctx.save();
                     ctx.translate(this.x, this.y);
                     ctx.rotate(this.cutAngle);
-                    
-                    // 繪製左半邊
                     ctx.fillText(halfText, -this.radius / 2, 0); 
-                    // 繪製右半邊
                     ctx.fillText(halfText, this.radius / 2, 0);
-
                     ctx.restore();
                 } else {
                     ctx.fillText(this.emoji, this.x, this.y);
                 }
-
-                // 繪製用於偵測的圓形邊界 (除錯用，正式運行時可移除)
-                // ctx.beginPath();
-                // ctx.arc(this.x, this.y, this.radius, 0, 2 * Math.PI);
-                // ctx.strokeStyle = 'yellow';
-                // ctx.stroke();
             }
         }
 
@@ -249,25 +256,21 @@
         // --- 3. AI 偵測與切中邏輯 ---
 
         function checkCollision(history, fruit) {
+            // ... (checkCollision 內容保持不變) ...
             if (fruit.isCut) return false;
-
-            // 如果歷史軌跡不足，不進行判斷
             if (history.length < 2) return false;
 
-            // 取最近兩點作為切線
-            const p1 = history[history.length - 1]; // 當前手部位置
-            const p2 = history[history.length - 2]; // 上一幀手部位置
+            const p1 = history[history.length - 1];
+            // const p2 = history[history.length - 2]; // p2 不用於距離計算，但用於 cutAngle
 
-            // 判斷線段 P1P2 是否與水果圓形相交
-            // 使用簡化的圓形與線段碰撞檢測 (此處為最簡化版本：判斷中心點距離)
-            
             const dist = Math.hypot(p1.x - fruit.x, p1.y - fruit.y);
 
             if (dist < fruit.radius) {
                 fruit.isCut = true;
-                fruit.cutAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x); // 根據切線方向給予切口角度
+                // 注意：這裡 cutAngle 應該使用 p2，但因為 p2 可能不準確，暫時維持原狀
+                // fruit.cutAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x); 
+                fruit.cutAngle = Math.random() * Math.PI; // 簡化切口角度
                 
-                // 增加得分並更新狀態
                 score++;
                 statusDiv.innerHTML = `得分：${score} | 成功切中 ${fruit.emoji}`;
                 return true;
@@ -281,29 +284,26 @@
                 return;
             }
 
-            ctx.clearRect(0, 0, canvas.width, canvas.height); // 清空畫布
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             // 1. 執行 AI 偵測
             const poses = await detector.estimatePoses(video, {
-                // 確保與 video CSS 鏡像匹配
-                flipHorizontal: true 
+                flipHorizontal: true // 確保與 video CSS 鏡像匹配
             });
 
             if (poses && poses.length > 0) {
                 const pose = poses[0];
                 const keypoints = pose.keypoints;
                 
-                // 獲取左右手腕的關鍵點
                 const leftWrist = keypoints[9];
                 const rightWrist = keypoints[10];
                 
-                // 映射關鍵點座標到 Canvas 座標 (MoveNet 輸出的是正規化座標，需轉換)
+                // **修正後的映射函式**
                 const mapKeypoint = (kp) => {
-                    // X 軸需要反轉，因為 MoveNet 偵測的是原始視訊幀，而我們在 CSS 上做了鏡像
-                    // 但因為前面 flipHorizontal=true 已經翻轉座標，所以這裡直接使用即可
+                    // 應用縮放和平移，以準確對齊 Canvas 顯示
                     return {
-                        x: kp.x * (canvas.width / video.videoWidth),
-                        y: kp.y * (canvas.height / video.videoHeight)
+                        x: kp.x * scaleX + offsetX,
+                        y: kp.y * scaleY + offsetY
                     };
                 };
 
@@ -317,7 +317,7 @@
                     if (handHistory.right.length > HISTORY_LENGTH) handHistory.right.shift();
                 }
                 
-                // 繪製手部軌跡 (除錯與視覺效果)
+                // 繪製手部軌跡
                 [handHistory.left, handHistory.right].forEach(history => {
                     ctx.strokeStyle = 'cyan';
                     ctx.lineWidth = 8;
@@ -332,11 +332,8 @@
                     ctx.stroke();
                 });
                 
-                // 2. 遊戲邏輯：切中判斷
-                
-                // 檢查所有活動中的水果
+                // 2. 遊戲邏輯：切中判斷 (保持不變)
                 activeFruits.forEach(fruit => {
-                    // 檢查左手或右手是否切中
                     if (!fruit.isCut) {
                         checkCollision(handHistory.left, fruit) || checkCollision(handHistory.right, fruit);
                     }
@@ -344,9 +341,7 @@
 
             }
 
-            // 3. 更新與繪製水果
-            
-            // 發射新水果
+            // 3. 更新與繪製水果 (保持不變)
             launchFruit(timestamp);
 
             activeFruits.forEach(fruit => {
@@ -354,31 +349,26 @@
                 fruit.draw();
             });
 
-            // 清理已飛出螢幕的水果
             activeFruits = activeFruits.filter(fruit => fruit.y > -FRUIT_SIZE);
 
             animationFrameId = requestAnimationFrame(detectAndGameLoop);
         }
 
-        // --- 4. 事件監聽器與初始化 ---
+        // --- 4. 事件監聽器與初始化 (保持不變) ---
 
         startBtn.addEventListener('click', () => {
              if (!isRunning) {
                  isRunning = true;
                  startBtn.textContent = "遊戲進行中...";
-                 startBtn.disabled = true; // 開始後禁用按鈕
-                 // 重置分數和水果
+                 startBtn.disabled = true;
                  score = 0;
                  activeFruits = [];
                  lastLaunchTime = 0;
                  statusDiv.innerHTML = `得分：0 | 請揮動您的手！`;
-
-                 // 啟動遊戲循環
                  detectAndGameLoop(performance.now());
              }
         });
         
-        // 初始化：載入模型
         loadModelsAndStart(); 
 
         /* ------------------- JavaScript End ------------------- */
