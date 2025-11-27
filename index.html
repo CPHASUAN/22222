@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AI 裝置端手勢切水果 (MoveNet)</title>
+    <title>AI 裝置端手勢切水果 (HandPose 修正版)</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.13.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.0.0/dist/pose-detection.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose@0.0.7/dist/handpose.min.js"></script>
     
     <style>
-        /* ------------------- CSS Start ------------------- */
+        /* ------------------- CSS 保持不變 ------------------- */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
@@ -40,7 +40,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            object-fit: cover; /* 關鍵：確保影片填滿容器並可能被裁剪 */
+            object-fit: cover;
         }
 
         #video {
@@ -83,7 +83,6 @@
             background-color: #6c757d;
             cursor: not-allowed;
         }
-        /* ------------------- CSS End ------------------- */
     </style>
 </head>
 <body>
@@ -106,17 +105,21 @@
         const ctx = canvas.getContext('2d');
         const container = document.getElementById('game-container');
         
-        let detector = null;
+        let detector = null; // 現在是 HandPose 模型
         let animationFrameId = null;
         let isRunning = false;
         
-        // **修正後座標計算參數**
+        // 修正後座標計算參數
         let scaleRatio = 1;
         let startX = 0;
         let startY = 0;
 
-        const handHistory = { left: [], right: [] };
-        const HISTORY_LENGTH = 5;
+        // 偵測點歷史：現在追蹤的是單個指尖
+        const fingerHistory = []; // 簡化為追蹤一個手部的軌跡
+        const HISTORY_LENGTH = 5; 
+
+        // HandPose 關鍵點索引 (Index Finger Tip)
+        const INDEX_FINGER_TIP = 8; 
 
         const FRUITS = ['🍎', '🍉', '🥝', '🍋', '🍇'];
         let activeFruits = [];
@@ -126,23 +129,15 @@
         let lastLaunchTime = 0;
         const LAUNCH_INTERVAL = 1500;
 
-        // --- 1. 核心模型和啟動 (修正 MoveNetType 錯誤) ---
+        // --- 1. 核心模型和啟動 (使用 HandPose) ---
 
         async function loadModelsAndStart() {
             try {
-                statusDiv.innerHTML = "正在載入 MoveNet 模型... (輕量級 SinglePose.Lightning)";
+                statusDiv.innerHTML = "正在載入 HandPose 模型... (專為手部追蹤優化)";
                 startBtn.disabled = true;
 
-                // **修正 MoveNet 配置：直接使用字串定義模型版本**
-                const detectorParams = {
-                    modelType: 'SinglePose.Lightning', 
-                    enableSmoothing: true
-                };
-                
-                detector = await poseDetection.createDetector(
-                    poseDetection.SupportedModels.MoveNet,
-                    detectorParams
-                );
+                // **載入 HandPose 模型**
+                detector = await handpose.load(); 
 
                 statusDiv.innerHTML = "✅ 模型載入完成！現在可切換至飛航模式運行。";
                 statusDiv.style.backgroundColor = 'rgba(0, 128, 0, 0.8)';
@@ -176,35 +171,30 @@
 
         // 影片載入完成後，執行座標計算 (修正 object-fit: cover 裁剪問題)
         video.addEventListener('loadeddata', () => {
-            const videoRatio = video.videoWidth / video.videoHeight;
             const containerWidth = container.clientWidth;
             const containerHeight = container.clientHeight;
-            const containerRatio = containerWidth / containerHeight;
-
+            
             canvas.width = containerWidth;
             canvas.height = containerHeight;
 
-            // 計算實際的縮放比率
             const ratio = Math.max(containerWidth / video.videoWidth, containerHeight / video.videoHeight);
             scaleRatio = ratio;
             
             const effectiveWidth = video.videoWidth * ratio;
             const effectiveHeight = video.videoHeight * ratio;
 
-            // 計算偏移量 (Gutter)
             startX = (containerWidth - effectiveWidth) / 2;
             startY = (containerHeight - effectiveHeight) / 2;
 
-            // 由於 CSS transform: scaleX(-1) (鏡像)，我們需要調整 X 軸的起始點。
-            // 鏡像會將 AI 輸出的 X 軸原點 (0) 映射到顯示區域的右側。
-            // 我們將 startX 設為從右邊開始的偏移量。
+            // 由於 CSS transform: scaleX(-1) (鏡像)，調整 X 軸的起始點
             startX = containerWidth - startX - effectiveWidth;
         });
 
 
-        // --- 2. 水果物件與生成 ---
+        // --- 2. 水果物件與生成 (保持不變) ---
 
         class Fruit {
+            // ... (Fruit Class 內容保持不變) ...
             constructor(emoji) {
                 this.emoji = emoji;
                 this.x = Math.random() * (canvas.width * 0.8) + (canvas.width * 0.1);
@@ -253,7 +243,7 @@
         }
 
 
-        // --- 3. AI 偵測與切中邏輯 ---
+        // --- 3. AI 偵測與切中邏輯 (使用指尖軌跡) ---
 
         function checkCollision(history, fruit) {
             if (fruit.isCut) return false;
@@ -262,12 +252,13 @@
             const p1 = history[history.length - 1];
             const p2 = history[history.length - 2];
 
-            // 判斷當前手部位置與水果中心點的距離
+            // 判斷當前指尖位置與水果中心點的距離
             const dist = Math.hypot(p1.x - fruit.x, p1.y - fruit.y);
 
-            if (dist < fruit.radius * 1.5) { // 提高偵測範圍
+            // 增加偵測範圍，確保精確的指尖划過動作能被捕捉
+            if (dist < fruit.radius * 1.5) { 
                 fruit.isCut = true;
-                // 使用手部移動方向作為切口角度
+                // 使用指尖移動方向作為切口角度
                 fruit.cutAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x); 
                 
                 score++;
@@ -285,62 +276,57 @@
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 1. 執行 AI 偵測
-            const poses = await detector.estimatePoses(video, {
-                // AI 輸出座標時不進行翻轉，讓 AI 輸出維持在非鏡像座標系
-                flipHorizontal: false 
-            });
+            // 1. 執行 AI 偵測 (HandPose 只能偵測到一個手部)
+            const predictions = await detector.estimateHands(video); // HandPose 輸出的是 predictions
 
-            if (poses && poses.length > 0) {
-                const pose = poses[0];
-                const keypoints = pose.keypoints;
+            if (predictions && predictions.length > 0) {
+                const hand = predictions[0]; // 追蹤偵測到的第一個手
+                const keypoints = hand.keypoints; // 21 個關鍵點
                 
-                const leftWrist = keypoints[9];
-                const rightWrist = keypoints[10];
+                // 獲取 食指指尖 的關鍵點
+                const fingerTip = keypoints[INDEX_FINGER_TIP]; 
                 
-                // **修正後的映射函式**：應用縮放、平移和鏡像
+                // **修正後的映射函式**：使用計算出的 cover 參數進行精確映射
                 const mapKeypoint = (kp) => {
-                    // 1. 鏡像處理：因為 CSS 鏡像了，所以 AI 輸出的 X 軸需要反轉 (video.videoWidth - kp.x)
-                    const flippedX = video.videoWidth - kp.x;
+                    // 1. 鏡像處理：因為 CSS 鏡像了，所以 AI 輸出的 X 軸需要反轉 (video.videoWidth - kp[0])
+                    // HandPose 的關鍵點座標是 [x, y, z] 陣列格式，而不是物件 {x, y}
+                    const flippedX = video.videoWidth - kp[0];
 
                     return {
                         x: flippedX * scaleRatio + startX, // 應用鏡像、縮放、X軸偏移
-                        y: kp.y * scaleRatio + startY      // 應用縮放、Y軸偏移
+                        y: kp[1] * scaleRatio + startY      // 應用縮放、Y軸偏移
                     };
                 };
 
-                // 更新手部軌跡
-                if (leftWrist.score > 0.6) {
-                    handHistory.left.push(mapKeypoint(leftWrist));
-                    if (handHistory.left.length > HISTORY_LENGTH) handHistory.left.shift();
-                }
-                if (rightWrist.score > 0.6) {
-                    handHistory.right.push(mapKeypoint(rightWrist));
-                    if (handHistory.right.length > HISTORY_LENGTH) handHistory.right.shift();
-                }
+                // 更新指尖軌跡 (只追蹤一個最顯著的手部)
+                const mappedTip = mapKeypoint(fingerTip);
+                fingerHistory.push(mappedTip);
+                if (fingerHistory.length > HISTORY_LENGTH) fingerHistory.shift();
                 
-                // 繪製手部軌跡
-                [handHistory.left, handHistory.right].forEach(history => {
-                    ctx.strokeStyle = 'cyan';
-                    ctx.lineWidth = 8;
-                    ctx.beginPath();
-                    history.forEach((p, index) => {
-                        if (index === 0) {
-                            ctx.moveTo(p.x, p.y);
-                        } else {
-                            ctx.lineTo(p.x, p.y);
-                        }
-                    });
-                    ctx.stroke();
+                // 繪製指尖軌跡 (模擬切痕)
+                ctx.strokeStyle = '#FFD700'; // 金色
+                ctx.lineWidth = 10;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                fingerHistory.forEach((p, index) => {
+                    if (index === 0) {
+                        ctx.moveTo(p.x, p.y);
+                    } else {
+                        ctx.lineTo(p.x, p.y);
+                    }
                 });
-                
+                ctx.stroke();
+
                 // 2. 遊戲邏輯：切中判斷
                 activeFruits.forEach(fruit => {
                     if (!fruit.isCut) {
-                        checkCollision(handHistory.left, fruit) || checkCollision(handHistory.right, fruit);
+                        checkCollision(fingerHistory, fruit);
                     }
                 });
 
+            } else {
+                // 如果沒有偵測到手部，清空軌跡
+                fingerHistory.length = 0; 
             }
 
             // 3. 更新與繪製水果
@@ -365,10 +351,9 @@
                  startBtn.disabled = true;
                  score = 0;
                  activeFruits = [];
-                 handHistory.left = [];
-                 handHistory.right = [];
+                 fingerHistory.length = 0; // 重置軌跡
                  lastLaunchTime = 0;
-                 statusDiv.innerHTML = `得分：0 | 請揮動您的手！`;
+                 statusDiv.innerHTML = `得分：0 | 請將食指對準鏡頭！`;
                  detectAndGameLoop(performance.now());
              }
         });
